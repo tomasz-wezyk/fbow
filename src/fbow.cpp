@@ -1,17 +1,13 @@
 #include "fbow.h"
 #include <fstream>
 #include <cstring>
+#include <iomanip>
+#include <iostream>
 #include <limits>
 #include <cstdint>
 #include <algorithm>
 
 namespace fbow{
-
-
-Vocabulary::~Vocabulary(){
-    if (_data!=nullptr) AlignedFree( _data);
-}
-
 
 void Vocabulary::setParams(int aligment, int k, int desc_type, int desc_size, int nblocks, std::string desc_name) {
     auto ns= desc_name.size()<static_cast<size_t>(49)?desc_name.size():128;
@@ -48,8 +44,8 @@ void Vocabulary::setParams(int aligment, int k, int desc_type, int desc_size, in
 
     //give memory
     _params._total_size=_params._block_size_bytes_wp*_params._nblocks;
-    _data=(char*)AlignedAlloc(_params._aligment,_params._total_size);
-    memset( _data,0,_params._total_size);
+    _data = Data_ptr((char*)AlignedAlloc(_params._aligment, _params._total_size), &AlignedFree);
+    memset(_data.get(), 0, _params._total_size);
 
 }
 
@@ -100,6 +96,14 @@ fBow Vocabulary::transform(const cv::Mat &features)
     if (features.type()!=_params._desc_type) throw std::runtime_error("Vocabulary::transform features are of different type than vocabulary");
     if (features.cols *  features.elemSize() !=size_t(_params._desc_size)) throw std::runtime_error("Vocabulary::transform features are of different size than the vocabulary ones");
 
+    std::cout << "FBOW fbow features (" <<features.rows << ", " << features.cols << "):" << std::endl;
+    for(int i = 0; i < features.rows; i++) {
+        for(int j = 0; j < features.cols; j++) {
+            std::cout << features.at<int>(i, j) << " ";
+        }
+        std::cout << std::endl;
+    }
+    std::cout << std::endl;
     //get host info to decide the version to execute
     if (!cpu_info){
         cpu_info=std::make_shared<cpu>();
@@ -145,6 +149,7 @@ fBow Vocabulary::transform(const cv::Mat &features)
         double inv_norm = 1./sqrt(norm);
         for(auto  &e:result) e.second*=inv_norm ;
     }
+    std::cout << "FBOW fbow result = " << result.hash() << std::endl;
     return result;
 }
 
@@ -152,8 +157,7 @@ fBow Vocabulary::transform(const cv::Mat &features)
 
 void Vocabulary::clear()
 {
-    if (_data!=0) AlignedFree(_data);
-    _data=0;
+    _data.reset();
     memset(&_params,0,sizeof(_params));
     _params._desc_name_[0]='\0';
 }
@@ -180,20 +184,19 @@ void Vocabulary::toStream(std::ostream &str)const{
     str.write((char*)&sig,sizeof(sig));
     //save string
     str.write((char*)&_params,sizeof(params));
-    str.write(_data,_params._total_size);
+    str.write(_data.get(), _params._total_size);
 }
 
 void Vocabulary::fromStream(std::istream &str)
 {
-    if (_data!=0) AlignedFree (_data);
     uint64_t sig;
     str.read((char*)&sig,sizeof(sig));
     if (sig!=55824124) throw std::runtime_error("Vocabulary::fromStream invalid signature");
     //read string
     str.read((char*)&_params,sizeof(params));
-    _data=(char*)AlignedAlloc(_params._aligment,_params._total_size);
+    _data = Data_ptr((char*)AlignedAlloc(_params._aligment, _params._total_size), &AlignedFree);
     if (_data==0) throw std::runtime_error("Vocabulary::fromStream Could not allocate data");
-    str.read(_data,_params._total_size);
+    str.read(_data.get(), _params._total_size);
 }
 
 double fBow::score (const  fBow &v1,const fBow &v2){
@@ -252,8 +255,10 @@ double fBow::score (const  fBow &v1,const fBow &v2){
 uint64_t fBow::hash()const{
     uint64_t seed = 0;
     for(auto e:*this)
+    {
+        // std::cout<< std::fixed << std::setprecision(15) << "hashing "<<e.first<<" "<<e.second<<std::endl;
         seed^= e.first +  int(e.second*1000)+ 0x9e3779b9 + (seed << 6) + (seed >> 2);
-
+    }
     return seed;
 
 }
@@ -262,7 +267,7 @@ uint64_t Vocabulary::hash()const{
 
     uint64_t seed = 0;
     for(uint64_t i=0;i<_params._total_size;i++)
-        seed^= _data[i] + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed^= _data.get()[i] + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     return seed;
 }
 void fBow::toStream(std::ostream &str) const   {
